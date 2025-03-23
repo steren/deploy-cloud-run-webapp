@@ -5,9 +5,8 @@
         max-width: 70ch;
         padding: 3em 1em;
         margin: auto;
-        line-height: 1.75;
-        font-size: 1.25em;
         font-family: sans-serif;
+        line-height: 1.75;
       }
     
       h1,h2,h3,h4,h5,h6 {
@@ -17,23 +16,7 @@
       p,ul,ol {
         margin-bottom: 2em;
       }
-    
-      img {
-        width: 100%;
-      }
-    
-      .icon {
-        float: left;
-        margin-right: 1em;
-        width: 3em;
-        height: 3em;
-      }
-    
-      pre {
-        overflow-x:auto;
-        font-size:0.8em;
-      }
-    
+        
       footer {
         font-size: small;
       }
@@ -49,8 +32,10 @@
     </header>
     <main>
       <ol>
-        <li><button onclick="oauth2SignIn();">Sign in with Google</button></li>
-        <li><button onclick="deploy();">Deploy to Cloud Run</button></li>
+        <li><button id="button-signin">Sign in with Google</button></li>
+        <li><label for="project">Google Cloud project ID: <input name="project" id="project" placeholder="my-gcp-project-id"/></label></li>
+        <li><button id="button-quota">Request quota for Cloud Run GPUs</button></li>
+        <li><button id="button-deploy">Deploy to Cloud Run</button></li>
       </ol>
     </main>
     <footer>
@@ -107,8 +92,23 @@
         return {
           launchStage: 'BETA',
           client: 'web-app-deploy-gemma',
+          labels: {
+            'created-with': 'web-app-deploy-gemma',
+          },
           template: {
-            containers: [{image}],
+            containers: [
+              {
+                image,
+                resources: {
+                  limits: {
+                    'nvidia.com/gpu': '1',
+                  },
+                },
+              }
+            ],
+            nodeSelector: {
+              'accelerator': 'nvidia-l4',
+            },
           },
         };
       }
@@ -121,10 +121,15 @@
           return;
         }
 
-        let project = 'steren-playground';
+        let project = document.getElementById('project').value;
+        if (!project) {
+          console.error('No project ID');
+          return;
+        }
+
         let region = 'us-central1';
-        let service = 'hello-from-web';
-        let image = 'gcr.io/cloudrun/hello';
+        let service = 'gemma';
+        let image = 'steren/ollama-with:gemma3-4b';
 
         console.log(`Deploying to Cloud Run: ${project} ${region} ${service} ${image}`);
 
@@ -179,6 +184,22 @@
         document.body.appendChild(form);
         form.submit();
       }
+
+      function requestQuota() {
+        // open a new window to request quota for Cloud Run GPUs
+        const baseURL = 'https://console.cloud.google.com/apis/api/run.googleapis.com/quotas?project=';
+        const project = document.getElementById('project').value;
+        if (!project) {
+          console.error('No project ID');
+          return;
+        }
+        const quotaFIlters = `&pageState=("allQuotasTable":("f":"%255B%257B_22k_22_3A_22Dimensions%2520%2528e.g.%2520location%2529_22_2C_22t_22_3A10_2C_22v_22_3A_22_5C_22region_3Aus-central1_5C_22_22_2C_22s_22_3Atrue_2C_22i_22_3A_22displayDimensions_22%257D_2C%257B_22k_22_3A_22Name_22_2C_22t_22_3A10_2C_22v_22_3A_22_5C_22Total%2520Nvidia%2520L4%2520GPU%2520allocation%2520without%2520zonal%2520redundancy_2C%2520per%2520project%2520per%2520region_5C_22_22_2C_22s_22_3Atrue_2C_22i_22_3A_22displayName_22%257D%255D"))`
+        window.open(baseURL + project + quotaFIlters);
+      }
+
+      document.getElementById('button-signin').addEventListener('click', oauth2SignIn);
+      document.getElementById('button-quota').addEventListener('click', requestQuota);
+      document.getElementById('button-deploy').addEventListener('click', deploy);
     </script>
   </body>
 </html>
