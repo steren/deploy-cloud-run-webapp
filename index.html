@@ -36,6 +36,20 @@
         <li><label for="project">Google Cloud project ID: <input name="project" id="project" placeholder="my-gcp-project-id"/></label></li>
         <li><button id="button-quota">Request quota for Cloud Run GPUs</button></li>
         <li><button id="button-deploy">Deploy to Cloud Run</button></li>
+        <li>
+          Connect to your Gemma 3 Cloud Run service:
+          <details name="use">
+            <summary>Using Ollama</summary>
+            <ol>
+              <li>Install with: <code>curl -fsSL https://ollama.com/install.sh | sh</code></li>
+              <li>Run: <code>OLLAMA_HOST=https://gemma-123456789.us-central1.run.app ollama run gemma3:4b</code></li>
+            </ol>
+          </details>
+          <details name="use">
+            <summary>Using the Google AI SDK</summary>
+          </details>
+          
+        </li>
       </ol>
     </main>
     <footer>
@@ -90,10 +104,14 @@
 
       function getCloudRunServicePayload(image) {
         return {
-          launchStage: 'BETA',
+          launchStage: 'ALPHA', // we need ALPHA to use healthCheckDisabled and scaling.automaticScaling.maxInstances
           client: 'web-app-deploy-gemma',
           labels: {
             'created-with': 'web-app-deploy-gemma',
+          },
+          scaling: {
+            minInstanceCount: 0, // allows scaling to zero
+            maxInstanceCount: 1, // limit to max 1 GPU instance
           },
           template: {
             containers: [
@@ -101,14 +119,17 @@
                 image,
                 resources: {
                   limits: {
-                    'nvidia.com/gpu': '1',
+                    'nvidia.com/gpu': '1', // 1 GPU
                   },
                 },
               }
             ],
             nodeSelector: {
-              'accelerator': 'nvidia-l4',
+              'accelerator': 'nvidia-l4', // NVIDIA L4 is enough for Gemma 3
             },
+            healthCheckDisabled: true, // no need for startup health check, we know the container starts
+            gpuZonalRedundancyDisabled: true, // we don't need zonal redundancy, it's cheaper
+            sessionAffinity: true, // In case of autoscaling connect to the same instance.
           },
         };
       }
