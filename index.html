@@ -55,6 +55,7 @@
           </details>
           <details name="use">
             <summary>Using the Google AI SDK</summary>
+            <code id="google-ai-sdk"></code>
           </details>
         </div>
           
@@ -299,6 +300,13 @@
         document.getElementById('service-url').textContent = url;
         document.getElementById('service-url').href = url;
         document.getElementById('ollama-command').textContent = `OLLAMA_HOST=${url} ollama run gemma3:4b`;
+
+        var genAISDK = `const genAI = new GoogleGenAI({ apiKey: "",
+          httpOptions: {
+              baseUrl: ${url}
+        });
+        `;
+        document.getElementById('google-ai-sdk').textContent = genAISDK;
 
         // Wait for deployment to finish
         await waitOperation(token, project, operation);
