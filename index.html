@@ -65,6 +65,10 @@
       const CLIENT_ID = '607903476290-nkeuoe6ojl8oq1f6cgb9rtervt4chao2.apps.googleusercontent.com';
       const REDIRECT_URI = window.location.origin;
 
+      const region = 'us-central1';
+      const service = 'gemma';
+      const image = 'steren/ollama-with:gemma3-4b';
+
       // Parse query string to see if page request is coming from OAuth 2.0 server.
       var fragmentString = location.hash.substring(1);
       var params = {};
@@ -135,9 +139,30 @@
         };
       }
 
+      function getTokenAndProject() {
+        var token = localStorage.getItem('token');
+        if (!token) {
+          console.error('No access token. Get one by signing in.');
+          return;
+        }
+
+        let project = document.getElementById('project').value;
+        if (!project) {
+          console.error('No project ID');
+          return;
+        }
+
+        return {token, project};
+      }
+
       async function checkCanDeploy() {
+        let {token, project} = getTokenAndProject();
+        if (!token || !project) {
+          return;
+        }
+
         // Try deploy, but only validate
-        const result = await deploy(true);
+        const result = await deploy(token, project, true);
         if(result.error) {
           // if message includes "quota"
           if(result.error.message.includes('quota')) {
@@ -153,23 +178,33 @@
         }
       }
 
-      async function deploy(validateOnly = false) {
+      async function makePublic(token, project, service) {
+        console.log(`Making service public: ${project} ${region} ${service}`);
 
-        var token = localStorage.getItem('token');
-        if (!token) {
-          console.error('No access token. Get one by signing in.');
-          return;
-        }
+        var response = await fetch(`https://${region}-run.googleapis.com/v1/projects/${project}/locations/${region}/services/${service}:setIamPolicy`, {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer ' + token,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            policy: {
+              bindings: [
+                {
+                  role: 'roles/run.invoker',
+                  members: ['allUsers'],
+                },
+              ],
+            },
+          })
+        });
+        var result = await response.json();
+        console.log(result);
 
-        let project = document.getElementById('project').value;
-        if (!project) {
-          console.error('No project ID');
-          return;
-        }
+        return result;
+      }
 
-        let region = 'us-central1';
-        let service = 'gemma';
-        let image = 'steren/ollama-with:gemma3-4b';
+      async function deploy(token, project, validateOnly = false) {
 
         console.log(`Deploying to Cloud Run: ${project} ${region} ${service} ${image}`);
 
@@ -181,11 +216,23 @@
           },
           body: JSON.stringify(getCloudRunServicePayload(image))
         });
-
         var result = await response.json();
         console.log(result);
 
         return result;
+      }
+
+      async function deployAndWait() {
+        let {token, project} = getTokenAndProject();
+        if (!token || !project) {
+          return;
+        }
+
+        // Deploy
+        await deploy(token, project);
+        
+        // Set IAM Permission
+        await makePublic(token, project, service);
       }
 
       /*
@@ -240,7 +287,7 @@
 
       document.getElementById('button-signin').addEventListener('click', oauth2SignIn);
       document.getElementById('button-quota').addEventListener('click', checkCanDeploy);
-      document.getElementById('button-deploy').addEventListener('click', deploy);
+      document.getElementById('button-deploy').addEventListener('click', deployAndWait);
     </script>
   </body>
 </html>
