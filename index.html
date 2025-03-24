@@ -35,7 +35,7 @@
       <ol>
         <li><button id="button-signin">Sign in with Google</button></li>
         <li><label for="project">Google Cloud project ID: <input name="project" id="project" placeholder="my-gcp-project-id"/></label></li>
-        <li><button id="button-quota">Request quota for Cloud Run GPUs</button></li>
+        <li><button id="button-quota">Click to check if you need quota for Cloud Run GPUs</button><span id="need-quota"></span></li>
         <li><button id="button-deploy">Deploy to Cloud Run</button></li>
         <li>
           Connect to your Gemma 3 Cloud Run service:
@@ -135,7 +135,25 @@
         };
       }
 
-      async function deploy() {
+      async function checkCanDeploy() {
+        // Try deploy, but only validate
+        const result = await deploy(true);
+        if(result.error) {
+          // if message includes "quota"
+          if(result.error.message.includes('quota')) {
+            console.warn('Need to request quota');
+            document.getElementById('need-quota').textContent = 'You need quota.';
+            requestQuota();
+          } else {
+            alert(`Error: ${result.error.message}`);
+          }
+        } else {
+          document.getElementById('need-quota').textContent = 'You have quota.';
+          console.log('Ready to deploy!');
+        }
+      }
+
+      async function deploy(validateOnly = false) {
 
         var token = localStorage.getItem('token');
         if (!token) {
@@ -167,6 +185,7 @@
         var result = await response.json();
         console.log(result);
 
+        return result;
       }
 
       /*
@@ -220,7 +239,7 @@
       }
 
       document.getElementById('button-signin').addEventListener('click', oauth2SignIn);
-      document.getElementById('button-quota').addEventListener('click', requestQuota);
+      document.getElementById('button-quota').addEventListener('click', checkCanDeploy);
       document.getElementById('button-deploy').addEventListener('click', deploy);
     </script>
   </body>
