@@ -112,6 +112,7 @@
             minInstanceCount: 0, // allows scaling to zero
             maxInstanceCount: 1, // limit to max 1 GPU instance
           },
+          invokerIamDisabled: true, // make public
           template: {
             containers: [
               {
@@ -130,7 +131,6 @@
                 },
               }
             ],
-            invokerIamDisabled: true, // make public
             executionEnvironment: 'EXECUTION_ENVIRONMENT_GEN2', // Chromium likely runs better on Gen2
             healthCheckDisabled: true, // no need for startup health check, we know the container starts
             sessionAffinity: true, // In case of autoscaling connect to the same instance.
