@@ -59,7 +59,7 @@
     <script type="module">
       const WEBAPP_NAME = 'web-app-deploy-chromium';
       const CLIENT_ID = '607903476290-nkeuoe6ojl8oq1f6cgb9rtervt4chao2.apps.googleusercontent.com';
-      const REDIRECT_URI = window.location.origin;
+      const REDIRECT_URI = window.location.href;
 
       const region = 'us-central1';
       const service = 'chromium';
@@ -102,7 +102,7 @@
           .replace(/=+$/, '');
       }
 
-      function getCloudRunServicePayload(image) {
+      function getCloudRunServicePayload() {
         return {
           launchStage: 'ALPHA', // we need ALPHA to use healthCheckDisabled and scaling.automaticScaling.maxInstances
           labels: {
@@ -156,7 +156,7 @@
 
 
       async function deploy(token, project, validateOnly = false) {
-        console.log(`Deploying to Cloud Run: ${project} ${region} ${service} ${image}, validate only? ${validateOnly}`);
+        console.log(`Deploying to Cloud Run: ${project} ${region} ${service}, validate only? ${validateOnly}`);
 
         let url = `https://${region}-run.googleapis.com/v2/projects/${project}/locations/${region}/services?serviceId=${service}`
         if(validateOnly) {
@@ -168,7 +168,7 @@
             'Authorization': 'Bearer ' + token,
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify(getCloudRunServicePayload(image))
+          body: JSON.stringify(getCloudRunServicePayload())
         });
         var result = await response.json();
         console.log(result);
