@@ -59,7 +59,7 @@
     <script type="module">
       const WEBAPP_NAME = 'web-app-deploy-chromium';
       const CLIENT_ID = '607903476290-nkeuoe6ojl8oq1f6cgb9rtervt4chao2.apps.googleusercontent.com';
-      const REDIRECT_URI = window.location.href;
+      const REDIRECT_URI = window.location.href.split('#')[0];
 
       const region = 'us-central1';
       const service = 'chromium';
