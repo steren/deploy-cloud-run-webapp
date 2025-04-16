@@ -25,10 +25,10 @@
   </head>
   <body>
     <header>
-      <h1>Deploy Chromium with UI to Cloud Run</h1>
+      <h1>Deploy 'hello' container to Cloud Run</h1>
       <p>
-        A <b>client-side</b> webapp to deploy Chromium with a visual interface to <a href="https://cloud.google.com/run">Google Cloud Run</a> using <a href="https://docs.linuxserver.io/images/docker-chromium/">LinuxServer</a>.<br>
-        Cloud Run is a serverless runtime that scales to zero and starts fast.  
+        A <b>client-side</b> webapp to deploy the <a href="https://gcr.io/cloudrun/hello">gcr.io/cloudrun/hello</a> container image to <a href="https://cloud.google.com/run">Google Cloud Run</a>.<br>
+        Cloud Run is a serverless runtime that scales to zero and starts fast.
       </p>
     </header>
     <main>
@@ -57,12 +57,11 @@
     </footer>
 
     <script type="module">
-      const WEBAPP_NAME = 'web-app-deploy-chromium';
       const CLIENT_ID = '607903476290-nkeuoe6ojl8oq1f6cgb9rtervt4chao2.apps.googleusercontent.com';
       const REDIRECT_URI = window.location.href.split('#')[0];
 
       const region = 'us-central1';
-      const service = 'chromium';
+      const service = 'hello';
 
       // Parse query string to see if page request is coming from OAuth 2.0 server.
       var fragmentString = location.hash.substring(1);
@@ -104,36 +103,18 @@
 
       function getCloudRunServicePayload() {
         return {
-          launchStage: 'ALPHA', // we need ALPHA to use healthCheckDisabled and scaling.automaticScaling.maxInstances
-          labels: {
-            'created-by': 'web-app-deploy-chromium',
-          },
+          launchStage: 'ALPHA', // we need ALPHA to use scaling.maxInstanceCount
           scaling: {
             minInstanceCount: 0, // allows scaling to zero
-            maxInstanceCount: 1, // limit to max 1 GPU instance
+            maxInstanceCount: 1, // limit to max 1 instance
           },
           invokerIamDisabled: true, // make public
           template: {
             containers: [
               {
-                image: 'linuxserver/chromium:latest',
-                ports: [
-                  {
-                    containerPort: 3000,
-                    name: 'http1',
-                  },
-                ],
-                resources: {
-                  limits: {
-                    'cpu': '8',
-                    'memory': '32Gi',
-                  },
-                },
+                image: 'gcr.io/cloudrun/hello',
               }
             ],
-            executionEnvironment: 'EXECUTION_ENVIRONMENT_GEN2', // Chromium likely runs better on Gen2
-            healthCheckDisabled: true, // no need for startup health check, we know the container starts
-            sessionAffinity: true, // In case of autoscaling connect to the same instance.
           },
         };
       }
