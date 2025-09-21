@@ -1,657 +1,100 @@
 <html>
-  <head>
-    <style>
-      html {
-        max-width: 70ch;
-        padding: 3em 1em;
-        margin: auto;
-        font-family: sans-serif;
-        line-height: 1.75;
-      }
-    
-      h1,h2,h3,h4,h5,h6 {
-        margin: 3em 0 1em;
-      }
-    
-      p,ul,ol {
-        margin-bottom: 2em;
-      }
-        
-      footer {
-        font-size: small;
-      }
-    
-    </style>    
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-  </head>
-  <body>
-    <header>
-      <h1>Deploy Container from Folder to Cloud Run</h1>
-      <p>
-        A <b>client-side</b> webapp to build a container from a local folder and deploy it to <a href="https://cloud.google.com/run">Google Cloud Run</a>.<br>
-        Select a folder containing a Dockerfile, and this tool will use Cloud Build and Cloud Run to deploy it.
-      </p>
-    </header>
-    <main>
-      <ol>
-        <li><button id="button-signin">Sign in with Google</button></li>
-        <li><label for="project">Google Cloud project ID: <input name="project" id="project" placeholder="my-gcp-project-id"/></label></li>
-        <li>
-            <button id="button-deploy">Deploy / Update Service</button>
-            <input type="file" id="folder-input-after-deploy" webkitdirectory directory multiple hidden/>
-        </li>
-        <li>
-          <span id="waiting-message" hidden>
-            <label for="deployment">Operation in progress:</label>
-            <progress id="deployment" aria-label="Operation in progress…"></progress><br>
-          </span>
-          <div id="status-area" style="margin-top: 1em;"></div>
-          <div id="deployed-message" hidden>Cloud Run service: <a id="service-url" target="_blank"></a><br></div>
-        </li>
-      </ol>
-    </main>
-    <footer>
-      <p>
-        <b>This is not an official Google product.</b> Use it at your own risk.<br>
-        The deployment is done from your browser to your Google Cloud project, no server involved.<br>
-        Built by <a href="https://steren.fr">Steren</a> (<a href="https://github.com/steren/deploy-gemma">source code</a>).
-      </p>
-    </footer>
-
-    <script type="module">
-      const WEBAPP_NAME = 'web-app-deploy-folder';
-      const CLIENT_ID = '607903476290-nkeuoe6ojl8oq1f6cgb9rtervt4chao2.apps.googleusercontent.com';
-      const REDIRECT_URI = window.location.href.split('#')[0];
-
-      const region = 'us-central1';
-      const service = 'my-app-service';
-      const artifactRegistryRepo = 'my-app-repo';
-      let createdBucketName = null;
-      const builtImageName = 'custom-app-image';
-
-      function generateCryptoRandomState() {
-        const randomValues = new Uint32Array(2);
-        window.crypto.getRandomValues(randomValues);
-        const utf8Encoder = new TextEncoder();
-        const utf8Array = utf8Encoder.encode(
-          String.fromCharCode.apply(null, randomValues)
-        );
-        return btoa(String.fromCharCode.apply(null, utf8Array))
-          .replace(/\+/g, '-')
-          .replace(/\//g, '_')
-          .replace(/=+$/, '');
-      }
-
-      function getCloudRunServicePayload(imageUri = 'gcr.io/cloud-run/placeholder') {
-        const containerImage = imageUri || 'gcr.io/cloud-run/placeholder';
-        console.log(`Using container image: ${containerImage}`);
-        return {
-          labels: {
-            'created-by': WEBAPP_NAME,
-          },
-          invokerIamDisabled: true,
-          template: {
-            containers: [
-              {
-                image: containerImage,
-              }
-            ],
-          },
-        };
-      }
-
-      function getTokenAndProject() {
-        var token = localStorage.getItem('token');
-        if (!token) {
-          console.error('No access token. Get one by signing in.');
-          return;
-        }
-
-        let project = document.getElementById('project').value;
-        if (!project) {
-          console.error('No project ID');
-          return;
-        }
-
-        return {token, project};
-      }
-
-      const REQUIRED_APIS = [
-        'storage.googleapis.com',
-        'run.googleapis.com',
-        'cloudbuild.googleapis.com',
-        'artifactregistry.googleapis.com'
-      ];
-
-      async function enableRequiredApis(token, project) {
-        console.log('Enabling required APIs...');
-        const response = await fetch(`https://serviceusage.googleapis.com/v1/projects/${project}/services:batchEnable`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            serviceIds: REQUIRED_APIS
-          })
-        });
-        
-        const result = await response.json();
-        if (result.error) {
-          throw new Error(`Failed to enable APIs: ${result.error.message}`);
-        }
-        return result;
-      }
-
-      async function createBucket(token, project) {
-        const bucketName = `${project}-folder-deploy-data`;
-        console.log(`Ensuring Cloud Storage bucket exists: ${bucketName}`);
-
-        const response = await fetch(`https://storage.googleapis.com/storage/v1/b?project=${project}`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            name: bucketName,
-            location: region,
-            storageClass: 'STANDARD',
-            labels: {
-               'created-by': WEBAPP_NAME
-            }
-          })
-        });
-
-        const result = await response.json();
-        if (result.error) {
-          if (result.error.code === 409) {
-            console.log(`Bucket ${bucketName} already exists. Reusing it.`);
-            return bucketName;
-          }
-          throw new Error(`Failed to create or verify bucket: ${result.error.message}`);
-        }
-        console.log(`Bucket ${result.name} created successfully.`);
-        return result.name;
-      }
-
-      async function createArtifactRegistryRepo(token, project) {
-        console.log(`Creating Artifact Registry repository: ${project}/${region}/${artifactRegistryRepo}`);
-        const response = await fetch(`https://artifactregistry.googleapis.com/v1/projects/${project}/locations/${region}/repositories?repositoryId=${artifactRegistryRepo}`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            name: `projects/${project}/locations/${region}/repositories/${artifactRegistryRepo}`,
-            format: 'DOCKER',
-            description: 'Container images built from folder deployer',
-            labels: {
-              'created-by': WEBAPP_NAME,
-            }
-          })
-        });
-        const result = await response.json();
-        if (result.error) {
-           if (result.error.code === 409) {
-             console.warn(`Artifact Registry repository ${artifactRegistryRepo} already exists: ${result.error.message}`);
-             return null;
-           }
-          throw new Error(`Failed to create Artifact Registry repository: ${result.error.message}`);
-        }
-        console.log(`Artifact Registry repository creation initiated. Operation: ${result.name}`);
-        return result.name;
-      }
-
-      async function waitArtifactRegistryOperation(token, operationName) {
-        if (!operationName) {
-           console.log("No Artifact Registry operation to wait for (repository might have existed).");
-           return;
-        }
-        console.log(`Waiting for Artifact Registry operation: ${operationName}`);
-        let result;
-        let attempts = 0;
-        const maxAttempts = 10;
-        const delay = 5000;
-
-        while (attempts < maxAttempts) {
-            const response = await fetch(`https://artifactregistry.googleapis.com/v1/${operationName}`, {
-                method: 'GET',
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json'
-                }
-            });
-            result = await response.json();
-
-            if (result.error) {
-                throw new Error(`Error waiting for Artifact Registry operation: ${result.error.message}`);
+    <head>
+        <style>
+            html {
+                max-width: 70ch;
+                padding: 3em 1em;
+                margin: auto;
+                font-family: sans-serif;
+                line-height: 1.75;
             }
 
-            if (result.done) {
-                console.log('Artifact Registry operation finished.', result);
-                if (result.response) {
-                   return result.response;
-                } else if (result.error) {
-                   throw new Error(`Artifact Registry operation failed: ${JSON.stringify(result.error)}`);
-                }
-                return;
+            h1,
+            h2,
+            h3,
+            h4,
+            h5,
+            h6 {
+                margin: 3em 0 1em;
             }
 
-            console.log('Artifact Registry operation still in progress...');
-            attempts++;
-            await new Promise(resolve => setTimeout(resolve, delay));
-        }
-        throw new Error(`Artifact Registry operation timed out after ${attempts} attempts.`);
-      }
-
-      async function deploy(token, project, imageUri, validateOnly = false) {
-        console.log(`Deploying (Creating) Cloud Run service: ${project} ${region} ${service} with image ${imageUri}`);
-        let url = `https://${region}-run.googleapis.com/v2/projects/${project}/locations/${region}/services?serviceId=${service}`;
-        if (validateOnly) {
-          url += '&validateOnly=true';
-        }
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'Authorization': 'Bearer ' + token,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(getCloudRunServicePayload(imageUri))
-        });
-        const result = await response.json();
-        console.log(result);
-
-        return result;
-      }
-
-      async function updateService(token, project, imageUri) {
-        console.log(`Updating existing Cloud Run service: ${project} ${region} ${service} with image ${imageUri}`);
-        const serviceName = `projects/${project}/locations/${region}/services/${service}`;
-        const response = await fetch(`https://${region}-run.googleapis.com/v2/${serviceName}`, {
-          method: 'PATCH',
-          headers: {
-            'Authorization': 'Bearer ' + token,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(getCloudRunServicePayload(imageUri))
-        });
-        const result = await response.json();
-        console.log(result);
-        return result;
-      }
-
-      async function waitOperation(token, project, operation) {
-        console.log(`Waiting for operation: ${operation}`);
-        const response = await fetch(`https://${region}-run.googleapis.com/v2/${operation}:wait`, {
-          method: 'POST',
-          headers: {
-            'Authorization': 'Bearer ' + token,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            timeout: '600s',
-          })
-        });
-        const result = await response.json();
-        console.log(result);
-
-        return result;
-      }
-
-      async function getService(token, project, service) {
-        console.log(`Getting service: ${project} ${region} ${service}`);
-        const serviceName = `projects/${project}/locations/${region}/services/${service}`;
-        const response = await fetch(`https://${region}-run.googleapis.com/v2/${serviceName}`, {
-          method: 'GET',
-          headers: {
-            'Authorization': 'Bearer ' + token,
-            'Content-Type': 'application/json'
-          }
-        });
-        if (!response.ok) {
-            let errorPayload;
-            try {
-                errorPayload = await response.json();
-            } catch (e) {}
-            const errorMessage = errorPayload?.error?.message || response.statusText || `HTTP error ${response.status}`;
-            const error = new Error(errorMessage);
-            error.status = response.status;
-            throw error;
-        }
-        if (response.status !== 204) {
-            const result = await response.json();
-            console.log(result);
-            return result;
-        }
-        return null;
-      }
-
-      function getCloudBuildPayload(project, bucketName, zipFileName, targetImage) {
-        return {
-          source: {
-            storageSource: {
-              bucket: bucketName,
-              object: zipFileName,
-            },
-          },
-          steps: [
-            {
-              name: 'gcr.io/cloud-builders/docker',
-              args: [
-                'build',
-                '-t', targetImage,
-                '.',	
-              ],
-            },
-            {
-              name: 'gcr.io/cloud-builders/docker',
-              args: ['push', targetImage],
-            },
-          ],
-          images: [targetImage],
-          options: {
-             logging: 'CLOUD_LOGGING_ONLY',
-          },
-        };
-      }
-
-      async function triggerCloudBuild(token, project, bucketName, zipFileName, targetImage) {
-        console.log(`Triggering Cloud Build for gs://${bucketName}/${zipFileName} to build ${targetImage}`);
-        const buildPayload = getCloudBuildPayload(project, bucketName, zipFileName, targetImage);
-
-        const response = await fetch(`https://cloudbuild.googleapis.com/v1/projects/${project}/builds`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(buildPayload)
-        });
-
-        const result = await response.json();
-        if (result.error) {
-          throw new Error(`Failed to trigger Cloud Build: ${result.error.message}`);
-        }
-
-        console.log('Cloud Build triggered successfully:', result);
-        return result;
-      }
-
-      async function waitCloudBuildOperation(token, project, buildId) {
-        console.log(`Waiting for Cloud Build operation: ${buildId}`);
-        const buildName = `projects/${project}/builds/${buildId}`;
-        let result;
-        let attempts = 0;
-        const maxAttempts = 60;
-        const delay = 10000;
-        const statusArea = document.getElementById('status-area');
-
-        while (attempts < maxAttempts) {
-          const response = await fetch(`https://cloudbuild.googleapis.com/v1/${buildName}`, {
-            method: 'GET',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json'
-            }
-          });
-          result = await response.json();
-
-          if (result.error) {
-            throw new Error(`Error waiting for Cloud Build operation: ${result.error.message}`);
-          }
-
-          console.log(`Build status: ${result.status}`);
-          statusArea.textContent = `Cloud Build in progress (Status: ${result.status})... Waiting...`;
-          if (result.status === 'SUCCESS') {
-            console.log('Cloud Build operation finished successfully.', result);
-            const builtImageUri = result.results?.images?.[0]?.name;
-            if (!builtImageUri) {
-              console.warn("Could not extract built image URI from build results.");
-            }
-            return result;
-          } else if (['FAILURE', 'INTERNAL_ERROR', 'TIMEOUT', 'CANCELLED'].includes(result.status)) {
-            throw new Error(`Cloud Build operation failed with status ${result.status}. Check build logs in GCP console (ID: ${buildId}).`);
-          }
-
-          attempts++;
-          await new Promise(resolve => setTimeout(resolve, delay));
-        }
-        throw new Error(`Cloud Build operation timed out after ${attempts} attempts (Build ID: ${buildId}).`);
-      }
-
-      async function deployAndWait() {
-        let tokenAndProjectResult;
-        try {
-            tokenAndProjectResult = getTokenAndProject();
-        } catch (e) {
-             document.getElementById('status-area').textContent = `Error: ${e.message}`;
-             return;
-        }
-
-        if (!tokenAndProjectResult?.token || !tokenAndProjectResult?.project) {
-          document.getElementById('status-area').textContent = 'Error: Missing token or project ID.';
-          return;
-        }
-
-        const deployButton = document.getElementById('button-deploy');
-        const statusArea = document.getElementById('status-area');
-        const waitingMessage = document.getElementById('waiting-message');
-        const deployedMessage = document.getElementById('deployed-message');
-
-        deployButton.disabled = true;
-        statusArea.textContent = 'Please select the folder containing your Dockerfile...';
-        waitingMessage.hidden = true;
-        deployedMessage.hidden = true;
-
-        document.getElementById('folder-input-after-deploy').click();
-      }
-
-      document.getElementById('folder-input-after-deploy').addEventListener('change', async (event) => {
-        const files = event.target.files;
-        const statusArea = document.getElementById('status-area');
-        const deployButton = document.getElementById('button-deploy');
-        const waitingMessage = document.getElementById('waiting-message');
-        const deployedMessage = document.getElementById('deployed-message');
-
-        deployButton.disabled = true;
-        waitingMessage.hidden = false;
-        deployedMessage.hidden = true;
-
-        if (!files || files.length === 0) {
-          statusArea.textContent = 'Folder selection cancelled. Ready for next deployment attempt.';
-          deployButton.disabled = false;
-          waitingMessage.hidden = true;
-          event.target.value = null;
-          return;
-        }
-
-        let token, project;
-        try {
-            const tokenAndProjectResult = getTokenAndProject();
-            if (!tokenAndProjectResult?.token || !tokenAndProjectResult?.project) {
-                throw new Error("Missing token or project ID.");
-            }
-            token = tokenAndProjectResult.token;
-            project = tokenAndProjectResult.project;
-        } catch (e) {
-            statusArea.textContent = `Error: ${e.message}`;
-            deployButton.disabled = false;
-            waitingMessage.hidden = true;
-            event.target.value = null;
-            return;
-        }
-
-        try {
-            statusArea.textContent = 'Starting deployment process...';
-
-            statusArea.textContent = 'Creating/Verifying Cloud Storage bucket...';
-            createdBucketName = await createBucket(token, project);
-            console.log(`Using bucket: ${createdBucketName}`);
-
-            statusArea.textContent = 'Enabling required Google Cloud APIs...';
-            await enableRequiredApis(token, project);
-
-            statusArea.textContent = 'Creating/Verifying Artifact Registry repository...';
-            const repoOperationName = await createArtifactRegistryRepo(token, project);
-            await waitArtifactRegistryOperation(token, repoOperationName);
-            console.log("Setup complete.");
-
-            statusArea.textContent = 'Validating folder contents...';
-            let dockerfileFound = false;
-            let topLevelFolder = '';
-            if (files.length > 0 && files[0].webkitRelativePath) {
-                const pathParts = files[0].webkitRelativePath.split('/');
-                if (pathParts.length > 1) {
-                    topLevelFolder = pathParts[0] + '/';
-                }
+            p,
+            ul,
+            ol {
+                margin-bottom: 2em;
             }
 
-            for (const file of files) {
-                if (file.webkitRelativePath === 'Dockerfile') {
-                    dockerfileFound = true;
-                    break;
-                }
-                if (topLevelFolder && file.webkitRelativePath.startsWith(topLevelFolder)) {
-                   const pathInZip = file.webkitRelativePath.substring(topLevelFolder.length);
-                   if (pathInZip === 'Dockerfile') {
-                       dockerfileFound = true;
-                       break;
-                   }
-                } else if (!topLevelFolder && file.webkitRelativePath === 'Dockerfile') {
-                    dockerfileFound = true;
-                    break;
-                }
+            footer {
+                font-size: small;
             }
+        </style>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    </head>
+    <body>
+        <header>
+            <h1>Deploy Container from Folder to Cloud Run</h1>
+            <p>
+                A <b>client-side</b> webapp to build a container from a local
+                folder and deploy it to
+                <a href="https://cloud.google.com/run">Google Cloud Run</a
+                >.<br />
+                Select a folder containing a Dockerfile, and this tool will use
+                Cloud Build and Cloud Run to deploy it.
+            </p>
+        </header>
+        <main>
+            <ol>
+                <li><button id="button-signin">Sign in with Google</button></li>
+                <li>
+                    <label for="project"
+                        >Google Cloud project ID:
+                        <input
+                            name="project"
+                            id="project"
+                            placeholder="my-gcp-project-id"
+                    /></label>
+                </li>
+                <li>
+                    <button id="button-deploy">Deploy / Update Service</button>
+                    <input
+                        type="file"
+                        id="folder-input-after-deploy"
+                        webkitdirectory
+                        directory
+                        multiple
+                        hidden
+                    />
+                </li>
+                <li>
+                    <span id="waiting-message" hidden>
+                        <label for="deployment">Operation in progress:</label>
+                        <progress
+                            id="deployment"
+                            aria-label="Operation in progress…"
+                        ></progress
+                        ><br />
+                    </span>
+                    <div id="status-area" style="margin-top: 1em"></div>
+                    <div id="deployed-message" hidden>
+                        Cloud Run service:
+                        <a id="service-url" target="_blank"></a><br />
+                    </div>
+                </li>
+            </ol>
+        </main>
+        <footer>
+            <p>
+                <b>This is not an official Google product.</b> Use it at your
+                own risk.<br />
+                The deployment is done from your browser to your Google Cloud
+                project, no server involved.<br />
+                Built by <a href="https://steren.fr">Steren</a> (<a
+                    href="https://github.com/steren/deploy-gemma"
+                    >source code</a
+                >).
+            </p>
+        </footer>
 
-            if (!dockerfileFound) {
-                throw new Error("Validation failed: No file named 'Dockerfile' found at the root of the selected folder.");
-            }
-            console.log("Dockerfile found.");
-
-            statusArea.textContent = 'Processing folder contents... Zipping files...';
-            const zip = new JSZip();
-            let fileCount = 0;
-            for (const file of files) {
-                 let pathInZip = file.webkitRelativePath;
-                 if (topLevelFolder && pathInZip.startsWith(topLevelFolder)) {
-                     pathInZip = pathInZip.substring(topLevelFolder.length);
-                 }
-
-                 if (pathInZip) {
-                    zip.file(pathInZip, file);
-                    fileCount++;
-                 }
-            }
-            if (fileCount === 0) throw new Error("Selected directory appears to be empty or contains only the top-level folder.");
-
-            statusArea.textContent = `Generating zip archive (${fileCount} files)...`;
-            const zipBlob = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
-            const zipFileName = `uploaded_source_${Date.now()}.zip`;
-
-            statusArea.textContent = `Uploading ${zipFileName} to gs://${createdBucketName}...`;
-            const uploadUrl = `https://storage.googleapis.com/upload/storage/v1/b/${createdBucketName}/o?uploadType=media&name=${encodeURIComponent(zipFileName)}`;
-            const uploadResponse = await fetch(uploadUrl, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/zip',
-                },
-                body: zipBlob
-            });
-            const uploadResult = await uploadResponse.json();
-            if (uploadResult.error) throw new Error(`Upload failed: ${uploadResult.error.message}`);
-            console.log('Upload successful:', uploadResult);
-
-            statusArea.textContent = `Successfully uploaded ${uploadResult.name}. Triggering Cloud Build...`;
-            const targetImage = `${region}-docker.pkg.dev/${project}/${artifactRegistryRepo}/${builtImageName}:latest`;
-            const buildOperation = await triggerCloudBuild(token, project, createdBucketName, uploadResult.name, targetImage);
-            const buildId = buildOperation.metadata?.build?.id;
-            if (!buildId) throw new Error("Could not get Cloud Build ID from trigger response.");
-
-            statusArea.textContent = `Cloud Build started (ID: ${buildId}). Waiting for completion...`;
-            const buildResult = await waitCloudBuildOperation(token, project, buildId);
-
-            const builtImageUriWithDigest = buildResult.results?.images?.[0]?.name;
-            const finalImageUri = builtImageUriWithDigest || targetImage;
-            statusArea.textContent = `Cloud Build successful. Built image: ${finalImageUri}. Deploying to Cloud Run...`;
-
-            let deployOrUpdateResult;
-            let serviceExists = false;
-            try {
-                console.log("Checking if service exists before final deploy/update...");
-                await getService(token, project, service);
-                serviceExists = true;
-                statusArea.textContent = `Updating existing Cloud Run service with new image...`;
-                deployOrUpdateResult = await updateService(token, project, finalImageUri);
-            } catch (error) {
-                if (error.status === 404) {
-                    statusArea.textContent = `Deploying new Cloud Run service with built image...`;
-                    serviceExists = false;
-                    deployOrUpdateResult = await deploy(token, project, finalImageUri);
-                } else {
-                    throw error;
-                }
-            }
-            if (deployOrUpdateResult.error) {
-                throw new Error(`Error during Cloud Run ${serviceExists ? 'update' : 'deployment'}: ${deployOrUpdateResult.error.message}`);
-            }
-
-            const runOperation = deployOrUpdateResult.name;
-            statusArea.textContent = `Cloud Run ${serviceExists ? 'update' : 'deployment'} initiated (${runOperation}). Waiting for completion...`;
-            await waitOperation(token, project, runOperation);
-
-            const serviceResult = await getService(token, project, service);
-            const url = serviceResult.uri || (serviceResult.urls && serviceResult.urls[0]);
-            document.getElementById('service-url').textContent = url;
-            document.getElementById('service-url').href = url;
-            deployedMessage.hidden = false;
-            waitingMessage.hidden = true;
-            statusArea.textContent = `Cloud Run service ${serviceExists ? 'updated' : 'deployed'} successfully with the custom image! Ready for next deployment.`;
-            console.log("Full process successful.");
-
-        } catch (error) {
-            console.error('Full deployment process failed:', error);
-            statusArea.textContent = `Error: ${error.message}`;
-            waitingMessage.hidden = true;
-        } finally {
-            deployButton.disabled = false;
-            event.target.value = null;
-        }
-      });
-
-      function oauth2SignIn() {
-        var state = generateCryptoRandomState();
-        localStorage.setItem('state', state);
-
-        var oauth2Endpoint = 'https://accounts.google.com/o/oauth2/v2/auth';
-
-        var form = document.createElement('form');
-        form.setAttribute('method', 'GET');
-        form.setAttribute('action', oauth2Endpoint);
-
-        var params = {'client_id': CLIENT_ID,
-                      'redirect_uri': REDIRECT_URI,
-                      'scope': 'https://www.googleapis.com/auth/cloud-platform',
-                      'state': state,
-                      'include_granted_scopes': 'true',
-                      'response_type': 'token'};
-
-        for (var p in params) {
-          var input = document.createElement('input');
-          input.setAttribute('type', 'hidden');
-          input.setAttribute('name', p);
-          input.setAttribute('value', params[p]);
-          form.appendChild(input);
-        }
-
-        document.body.appendChild(form);
-        form.submit();
-      }
-
-      document.getElementById('button-signin').addEventListener('click', oauth2SignIn);
-      document.getElementById('button-deploy').addEventListener('click', deployAndWait);
-    </script>
-  </body>
+        <script type="module" src="./script.js"></script>
+    </body>
 </html>
