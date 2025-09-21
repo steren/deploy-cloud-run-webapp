@@ -1,17 +1,10 @@
 import { service as defaultService, region, artifactRegistryRepo, builtImageName } from "./config.js";
 import { getTokenAndProject, oauth2SignIn } from "./auth.js";
-import {
-  enableRequiredApis,
-  createBucket,
-  createArtifactRegistryRepo,
-  waitArtifactRegistryOperation,
-  triggerCloudBuild,
-  waitCloudBuildOperation,
-  getService,
-  updateService,
-  deploy,
-  waitOperation,
-} from "./gcp.js";
+import { enableRequiredApis } from "./gcp/service-usage.js";
+import { createBucket } from "./gcp/storage.js";
+import { createArtifactRegistryRepo, waitArtifactRegistryOperation } from "./gcp/artifact-registry.js";
+import { triggerCloudBuild, waitCloudBuildOperation } from "./gcp/cloud-build.js";
+import { getService, updateService, deploy, waitOperation } from "./gcp/cloud-run.js";
 
 let createdBucketName = null;
 
